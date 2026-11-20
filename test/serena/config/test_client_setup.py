@@ -1,6 +1,12 @@
+import json
+
 import pytest
 
-from serena.config.client_setup import ClientSetupHandlerGrok, client_setup_handlers
+from serena.config.client_setup import (
+    ClientSetupHandlerGrok,
+    ClientSetupHandlerTrae,
+    client_setup_handlers,
+)
 from serena.config.context_mode import SerenaAgentContext
 from serena.util.shell import ShellCommandResult
 
@@ -123,9 +129,86 @@ def test_grok_setup_handler_apply_failure_skips_hook_recommendation(monkeypatch,
 def test_client_setup_handlers_use_resolvable_contexts():
     handler_names = [handler.name for handler in client_setup_handlers]
     assert "grok" in handler_names
+    assert "trae" in handler_names
 
     for handler in client_setup_handlers:
         context_options = [option for option in handler.get_mcp_server_options() if option.startswith("--context=")]
         assert len(context_options) == 1
         context_name = context_options[0].removeprefix("--context=")
         assert SerenaAgentContext.from_name(context_name).name == context_name
+
+
+def test_trae_setup_handler_is_applicable_when_trae_dir_exists(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".trae").mkdir()
+
+    def fake_execute_shell_command(command: str, capture_stderr: bool = False) -> ShellCommandResult:
+        return _result(command, return_code=1)
+
+    monkeypatch.setattr("serena.config.client_setup.execute_shell_command", fake_execute_shell_command)
+
+    assert ClientSetupHandlerTrae().is_applicable() is True
+
+
+def test_trae_setup_handler_is_applicable_via_traecli(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    def fake_execute_shell_command(command: str, capture_stderr: bool = False) -> ShellCommandResult:
+        if command == "traecli --version":
+            return _result(command, stdout="traecli 0.120.42\n")
+        return _result(command, return_code=1)
+
+    monkeypatch.setattr("serena.config.client_setup.execute_shell_command", fake_execute_shell_command)
+
+    assert ClientSetupHandlerTrae().is_applicable() is True
+
+
+def test_trae_setup_handler_not_applicable(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    def fake_execute_shell_command(command: str, capture_stderr: bool = False) -> ShellCommandResult:
+        return _result(command, return_code=1)
+
+    monkeypatch.setattr("serena.config.client_setup.execute_shell_command", fake_execute_shell_command)
+
+    assert ClientSetupHandlerTrae().is_applicable() is False
+
+
+def test_trae_setup_handler_apply_writes_mcp_json(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert ClientSetupHandlerTrae().apply() is True
+
+    mcp_json = tmp_path / ".trae" / "mcp.json"
+    assert mcp_json.exists()
+    config = json.loads(mcp_json.read_text(encoding="utf-8"))
+    assert config["mcpServers"]["serena"] == {
+        "command": "serena",
+        "args": ["start-mcp-server", "--context=trae", "--project=${workspaceFolder}"],
+    }
+
+
+def test_trae_setup_handler_apply_merges_existing_mcp_json(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    trae_dir = tmp_path / ".trae"
+    trae_dir.mkdir()
+    (trae_dir / "mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "other"}}}), encoding="utf-8")
+
+    assert ClientSetupHandlerTrae().apply() is True
+
+    config = json.loads((trae_dir / "mcp.json").read_text(encoding="utf-8"))
+    # existing entry preserved
+    assert config["mcpServers"]["other"] == {"command": "other"}
+    # serena entry added
+    assert config["mcpServers"]["serena"]["command"] == "serena"
+
+
+def test_trae_setup_handler_apply_fails_on_invalid_existing_json(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    trae_dir = tmp_path / ".trae"
+    trae_dir.mkdir()
+    (trae_dir / "mcp.json").write_text("{not valid json", encoding="utf-8")
+
+    assert ClientSetupHandlerTrae().apply() is False
+    # existing file left untouched
+    assert (trae_dir / "mcp.json").read_text(encoding="utf-8") == "{not valid json"
+    assert "could not parse" in capsys.readouterr().out.lower()

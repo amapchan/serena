@@ -236,6 +236,12 @@ class SerenaAgentContext(ToolInclusionDefinition, ApiInclusionDefinition, ToStri
         legacy_name_mapping = {
             "ide-assistant": "claude-code",
         }
+        # Aliases for the same product under different brand names. Trae CN (trae-cn) is
+        # technically identical to the international Trae build (same MCP/hook payload shape),
+        # so both resolve to the single `trae` context.
+        alias_name_mapping = {
+            "trae-cn": "trae",
+        }
         if name in legacy_name_mapping:
             log.warning(
                 f"Context name '{name}' is deprecated and has been renamed to '{legacy_name_mapping[name]}'. "
@@ -243,6 +249,8 @@ class SerenaAgentContext(ToolInclusionDefinition, ApiInclusionDefinition, ToStri
                 "https://oraios.github.io/serena/02-usage/050_configuration.html#contexts"
             )
             name = legacy_name_mapping[name]
+        if name in alias_name_mapping:
+            name = alias_name_mapping[name]
         context_path = cls.get_path(name)
         return cls.from_yaml(context_path)
 

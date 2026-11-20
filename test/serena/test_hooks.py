@@ -510,6 +510,53 @@ class TestPreToolUseRemindAboutSerenaHook:
             hook = PreToolUseRemindAboutSymbolicToolsHook(HookClient.GROK)
         assert hook.is_serena_symbolic_tool() is True
 
+    def test_trae_native_shell_tool_is_runcommand(self, tmp_path: Path):
+        payload = _base_input("RunCommand", tool_input={"command": "rg -n foo src/main.py"})
+        with patch("sys.stdin", _make_stdin(payload)), patch("serena.hooks.serena_home_dir", str(tmp_path)):
+            hook = PreToolUseRemindAboutSymbolicToolsHook(HookClient.TRAE)
+
+        assert hook.is_grep_call() is True
+
+    def test_trae_non_shell_tool_with_command_parameter_not_classified(self, tmp_path: Path):
+        payload = _base_input("mcp__deploy__run_task", tool_input={"command": "rg foo", "task_name": "deploy"})
+        with patch("sys.stdin", _make_stdin(payload)), patch("serena.hooks.serena_home_dir", str(tmp_path)):
+            hook = PreToolUseRemindAboutSymbolicToolsHook(HookClient.TRAE)
+
+        assert hook.is_grep_call() is False
+        assert hook.is_read_file_call() is False
+
+    def test_trae_native_read_tool_uses_path_field(self, tmp_path: Path):
+        payload = _base_input("Read", tool_input={"path": "src/main.py"})
+        with patch("sys.stdin", _make_stdin(payload)), patch("serena.hooks.serena_home_dir", str(tmp_path)):
+            hook = PreToolUseRemindAboutSymbolicToolsHook(HookClient.TRAE)
+
+        assert hook.is_read_file_call() is True
+        assert hook.is_read_code_file_call() is True
+
+    def test_trae_native_grep_tool_detected(self, tmp_path: Path):
+        payload = _base_input("Grep", tool_input={"pattern": "foo"})
+        with patch("sys.stdin", _make_stdin(payload)), patch("serena.hooks.serena_home_dir", str(tmp_path)):
+            hook = PreToolUseRemindAboutSymbolicToolsHook(HookClient.TRAE)
+
+        assert hook.is_grep_call() is True
+
+    def test_trae_deny_output_uses_hook_specific_output(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        payload = _base_input("Grep", tool_input={"pattern": "foo"})
+        for _ in range(ToolUseCounter._GREP_USES_THRESHOLD):
+            _execute_remind_hook(HookClient.TRAE, payload, tmp_path)
+
+        result = json.loads(capsys.readouterr().out.strip())
+        hook_output = result["hookSpecificOutput"]
+        assert hook_output["permissionDecision"] == "deny"
+        assert "grep" in hook_output["additionalContext"].lower()
+
+    def test_trae_auto_approve_stays_silent(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        payload = _base_input("mcp__serena__replace_symbol_body", tool_input={})
+        with patch("sys.stdin", _make_stdin(payload)), patch("serena.hooks.serena_home_dir", str(tmp_path)):
+            PreToolUseAutoApproveSerenaHook(HookClient.TRAE).execute()
+
+        assert capsys.readouterr().out == ""
+
     def test_no_output_below_threshold(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
         """Below the threshold, the hook should produce no output (tool is allowed)."""
         for _ in range(ToolUseCounter._GREP_USES_THRESHOLD - 1):

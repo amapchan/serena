@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import json
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import click
 
@@ -140,9 +142,81 @@ class ClientSetupHandlerGrok(ClientSetupHandler):
         return is_success
 
 
+class ClientSetupHandlerTrae(ClientSetupHandler):
+    """
+    Setup for Trae IDE (international) and Trae CN.
+
+    Trae has no CLI command to register an MCP server; it reads project-level MCP
+    configuration from ``<project>/.trae/mcp.json`` (after enabling "Project-level MCP"
+    in Settings > MCP). Both the Trae IDE and the Trae CLI consume this file, so we
+    write/merge the Serena entry there.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("trae")
+
+    def is_applicable(self) -> bool:
+        """
+        :return: always ``True`` — the setup only writes project-level configuration files (creating
+            them as needed) and does not depend on any Trae executable being available
+        """
+        return True
+
+    def get_mcp_server_options(self) -> list[str]:
+        # Trae resolves ${workspaceFolder} to the project root inside mcp.json args.
+        return ["--context=trae", "--project=${workspaceFolder}"]
+
+    def apply(self) -> bool:
+        trae_dir = Path(".trae")
+        try:
+            trae_dir.mkdir(exist_ok=True)
+        except OSError as e:
+            click.echo(f"Error: could not create {trae_dir.resolve()}: {e}")
+            return False
+
+        mcp_json_path = trae_dir / "mcp.json"
+
+        config: dict = {}
+        if mcp_json_path.exists():
+            try:
+                config = json.loads(mcp_json_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                click.echo(f"Error: could not parse existing {mcp_json_path.resolve()}: {e}")
+                return False
+            if not isinstance(config, dict):
+                click.echo(f"Error: {mcp_json_path.resolve()} does not contain a JSON object.")
+                return False
+
+        mcp_servers = config.get("mcpServers")
+        if mcp_servers is None:
+            mcp_servers = {}
+        if not isinstance(mcp_servers, dict):
+            mcp_servers = {}
+
+        mcp_servers["serena"] = {
+            "command": "serena",
+            "args": ["start-mcp-server", *self.get_mcp_server_options()],
+        }
+        config["mcpServers"] = mcp_servers
+
+        try:
+            mcp_json_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except OSError as e:
+            click.echo(f"Error: could not write {mcp_json_path.resolve()}: {e}")
+            return False
+
+        click.echo(f"Updated {mcp_json_path.resolve()} with the Serena MCP server configuration.")
+        click.echo("\nIMPORTANT: In Trae, enable 'Project-level MCP' in Settings > MCP for this configuration to take effect.")
+        click.echo("   Note: on Windows the `command` field cannot contain spaces, so `serena` must be on PATH.")
+        click.echo("   We additionally recommend setting up hooks for Trae. Please read:")
+        click.echo("   https://oraios.github.io/serena/02-usage/030_clients.html#trae")
+        return True
+
+
 client_setup_handlers = [
     ClientSetupHandlerClaudeCode(),
     ClientSetupHandlerCodeBuddy(),
     ClientSetupHandlerCodex(),
     ClientSetupHandlerGrok(),
+    ClientSetupHandlerTrae(),
 ]

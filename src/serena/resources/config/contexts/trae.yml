@@ -1,0 +1,26 @@
+description: Trae IDE / Trae CLI agent context (file operations, basic edits and shell handled by Trae's own tools; single project mode). The same context applies to both the international Trae build and Trae CN.
+prompt: |
+  You are running in a Trae IDE/CLI agent context where file operations, basic (line-based) edits and reads,
+  and shell commands are handled by your own, internal tools.
+
+  Serena's MCP tools are available to you and give you code intelligence capabilities (symbolic search,
+  structural reads and edits). They are exposed as MCP tools and must be loaded/invoked explicitly.
+
+  If Serena's tools can be used to achieve your task, you should prioritize them.
+  In particular, it is important that you avoid reading entire source code files unless it is strictly necessary!
+  Instead, for exploring and reading code in a token-efficient manner, use Serena's overview and symbolic search tools.
+  For non-code files or for reads where you don't know the symbol's name path, you can use the pattern search tool.
+
+excluded_tools:
+  - create_text_file
+  - read_file
+  - execute_shell_command
+  - find_file
+  - list_dir
+
+tool_description_overrides: {}
+
+# Trae IDE/CLI operates on a single workspace/project at a time, so we enable single-project mode:
+# when a project is provided at startup, the tool set is limited to what that project needs and
+# project switching (activate_project) is disabled.
+single_project: true

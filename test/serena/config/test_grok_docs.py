@@ -43,7 +43,7 @@ def test_grok_docs_are_consistent():
     assert "serena-hooks cleanup --client=grok" in grok_section
 
     assert "* `grok`: Optimized for use with xAI's Grok Build CLI." in config_doc
-    assert "contexts `ide`, `claude-code`, and `grok` are **single-project contexts**" in config_doc
+    assert "contexts `ide`, `claude-code`, `grok`, and `trae` are **single-project contexts**" in config_doc
 
 
 def test_grok_hook_matcher_docs_match_code(tmp_path: Path):

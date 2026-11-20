@@ -883,6 +883,106 @@ ZCode supports lifecycle hooks with the same event names as Claude Code (`Sessio
   against a live ZCode session, so start with an unscoped matcher and narrow it if ZCode's permission
   prompts turn out to fire on non-Serena tools too.
 
+## Trae (IDE / CLI) and Trae CN
+
+Serena supports [Trae](https://www.trae.ai) (international) and [Trae CN](https://www.trae.cn) (国内版) as
+a single `trae` context — both builds use the same MCP and hook payload shapes, so `--context=trae` works
+for either. If you prefer to spell out the edition, `--context=trae-cn` is accepted as an alias for `trae`.
+
+There are two ways to register Serena as an MCP server in Trae:
+
+1. **Automatic (project-level)**: run `serena setup trae` inside your project. This creates or merges the
+   Serena entry into `.trae/mcp.json`. You then only need to enable *Project-level MCP* in
+   *Settings > MCP*.
+2. **Manual**: add the entry yourself (see below).
+
+### Manual Setup
+
+Trae IDE reads project-level MCP servers from `.trae/mcp.json` in the project root (after enabling
+*Project-level MCP* in *Settings > MCP*). The Trae CLI reads the same file. Add:
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": ["start-mcp-server", "--context=trae", "--project=${workspaceFolder}"]
+    }
+  }
+}
+```
+
+Trae expands `${workspaceFolder}` to the project root when launching the server, so the single-project
+`trae` context binds Serena to the current workspace.
+
+```{note}
+On Windows the `command` field **cannot contain spaces**. If `serena` is not on your system `PATH`,
+either add it or use a short/quoting-free path to the executable.
+```
+
+For a global (all-workspaces) setup, use Trae's *Settings > MCP > Add > Manual* UI instead and paste the
+same `mcpServers` object; global config is not written to a file by Serena.
+
+### Hooks
+
+Trae (IDE 3.3.70+ / CLI 0.120.42+) supports lifecycle hooks (`SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `Stop`, `Notification`). Configure them in `.trae/hooks.json` (project) or
+`~/.trae-cn/hooks.json` (Trae CN, global) / `~/.trae/hooks.json` (Trae, global):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "serena-hooks activate --client=trae" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|RunCommand",
+        "hooks": [
+          { "type": "command", "command": "serena-hooks remind --client=trae" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp.*serena.*",
+        "hooks": [
+          { "type": "command", "command": "serena-hooks reset --client=trae" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "serena-hooks cleanup --client=trae" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```{note}
+Trae runs hooks in the system shell (PowerShell on Windows). The `serena-hooks` command must be on
+`PATH`. Hooks default to running in a sandbox; if `serena-hooks` is blocked, switch the hook
+*run mode* to *本地自动运行* (run locally) in *Settings > Hooks*.
+```
+
+### Hook Descriptions
+
+- **`activate`**: Prompt the agent to activate the project at session start and read Serena's instructions.
+- **`remind`**: Remind the agent to use Serena's symbolic tools instead of built-in `Read`/`Grep`/`RunCommand`.
+- **`reset`**: Reset the grep/read-drift counters after a successful Serena tool call (complements `remind`).
+- **`cleanup`**: Clean up hook session data when the session ends.
+
+`auto-approve` is intentionally not wired for Trae: Trae does not report a Claude-style `permission_mode`
+in its hook payload, so the hook has nothing to act on and stays silent.
+
 ## Other Clients
 
 For other clients, follow the [general instructions](#clients-general-instructions) above to set up Serena as an MCP server.

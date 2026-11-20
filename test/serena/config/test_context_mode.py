@@ -49,6 +49,31 @@ def test_grok_context_prompt_renders():
     assert "Serena's code intelligence tools" in rendered_prompt
 
 
+TRAE_EXCLUDED_TOOLS = {
+    "create_text_file",
+    "read_file",
+    "execute_shell_command",
+    "find_file",
+    "list_dir",
+}
+
+
+def test_trae_context_loads():
+    context = SerenaAgentContext.from_name("trae")
+
+    assert context.name == "trae"
+    assert context.single_project is True
+    assert context.structured_tool_output is None
+    assert set(context.excluded_tools) == TRAE_EXCLUDED_TOOLS
+
+
+def test_trae_cn_alias_resolves_to_trae():
+    context = SerenaAgentContext.from_name("trae-cn")
+
+    assert context.name == "trae"
+    assert context.single_project is True
+
+
 @pytest.mark.parametrize("context_name", BUILTIN_RUNTIME_CONTEXT_NAMES)
 def test_builtin_contexts_load_and_prompt_templates_render(context_name: str):
     context = SerenaAgentContext.from_name(context_name)

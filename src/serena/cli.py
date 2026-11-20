@@ -4,6 +4,7 @@ import collections
 import glob
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import time
 from collections.abc import Iterator, Sequence
 from logging import Logger
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -68,8 +70,21 @@ For details on mode configuration, see
 """
 
 
-def find_project_root(root: str | Path | None = None) -> str | None:
-    """Find project root by walking up from CWD.
+def _add_async_stderr_handler(stderr_handler: logging.Handler) -> None:
+    """
+    Adds the given stderr handler to the root logger via a queue, such that log emissions never
+    block the emitting thread. GUI clients like Trae spawn the server with piped stdio and may
+    not consume the stderr pipe, which would otherwise block the logging system (and, since all
+    handlers of the root logger are invoked synchronously by the emitting thread, eventually all
+    tool executions) once the pipe buffer is full.
+    """
+    log_queue: queue.Queue[logging.LogRecord] = queue.Queue()
+    Logger.root.addHandler(QueueHandler(log_queue))
+    QueueListener(log_queue, stderr_handler).start()
+
+
+def find_project_root(root: str | Path | None = None, start: str | Path | None = None) -> str | None:
+    """Find project root by walking up from ``start`` (default: CWD).
 
     Returns the nearest ancestor that is either an explicit Serena project
     (contains .serena/project.yml) or a git root (contains .git, which may be a
@@ -84,9 +99,10 @@ def find_project_root(root: str | Path | None = None) -> str | None:
 
     :param root: If provided, constrains the search to this directory and below
                  (acts as a virtual filesystem root). Search stops at this boundary.
+    :param start: directory from which to start walking up (defaults to CWD)
     :return: absolute path to project root or None if not suitable root is found
     """
-    current = Path.cwd().resolve()
+    current = Path(start).resolve() if start is not None else Path.cwd().resolve()
     boundary = Path(root).resolve() if root is not None else None
 
     def ancestors() -> Iterator[Path]:
@@ -391,10 +407,20 @@ class TopLevelCommands(AutoRegisteringGroup):
         default=False,
         help="Auto-detect project from current working directory (nearest ancestor containing .serena/project.yml or .git). If none is found, no project is activated. Intended for CLI-based agents like Claude Code, Gemini and Codex.",
     )
+    @click.option(
+        "--project-from-client",
+        is_flag=True,
+        default=False,
+        help="Auto-detect the project from the workspace of the GUI client that launched this server (e.g. Trae), "
+        "by extracting the workspace path from the client's main-process command line. If no workspace can be "
+        "resolved, no project is activated. Intended for GUI clients which spawn Serena with a cwd that is "
+        "unrelated to the opened workspace.",
+    )
     def start_mcp_server(
         project: str | None,
         project_file_arg: str | None,
         project_from_cwd: bool | None,
+        project_from_client: bool | None,
         context: str,
         default_modes: Sequence[str],
         added_modes: Sequence[str],
@@ -411,29 +437,34 @@ class TopLevelCommands(AutoRegisteringGroup):
         tool_timeout: float | None,
     ) -> None:
         from serena.mcp import SerenaMCPFactory, uvicorn_ignore_logging_config_context
+        from serena.util.client_workspace import find_client_workspace_path
 
         # initialize logging, using INFO level initially (will later be adjusted by SerenaAgent according to the config)
         #   * memory log handler (for use by GUI/Dashboard)
-        #   * stream handler for stderr (for direct console output, which will also be captured by clients like Claude Desktop)
         #   * file handler
+        #   * stream handler for stderr (for direct console output, which will also be captured by clients like Claude Desktop),
+        #     added asynchronously: GUI clients like Trae spawn the MCP server with piped stdio and may not consume the stderr
+        #     pipe, which would otherwise block the logging system (and with it, all tool executions) once the pipe buffer is full
         # (Note that stdout must never be used for logging, as it is used by the MCP server to communicate with the client.)
         Logger.root.setLevel(logging.INFO)
         formatter = logging.Formatter(SERENA_LOG_FORMAT)
         memory_log_handler = MemoryLogHandler()
         Logger.root.addHandler(memory_log_handler)
-        stderr_handler = logging.StreamHandler(stream=sys.stderr)
-        stderr_handler.formatter = formatter
-        Logger.root.addHandler(stderr_handler)
         log_path = SerenaPaths().get_next_log_file_path("mcp")
         file_handler = logging.FileHandler(log_path, mode="w")
         file_handler.formatter = formatter
         Logger.root.addHandler(file_handler)
+        stderr_handler = logging.StreamHandler(stream=sys.stderr)
+        stderr_handler.formatter = formatter
+        _add_async_stderr_handler(stderr_handler)
 
         log.info("Initializing Serena MCP server")
         log.info("Storing logs in %s", log_path)
 
         # Handle --project-from-cwd flag
         project_activation_error: str | None = None
+        if project_from_cwd and project_from_client:
+            raise click.UsageError("--project-from-cwd and --project-from-client cannot be used together")
         if project_from_cwd:
             if project is not None or project_file_arg is not None:
                 raise click.UsageError("--project-from-cwd cannot be used with --project or positional project argument")
@@ -445,6 +476,30 @@ class TopLevelCommands(AutoRegisteringGroup):
                     f"No project root found from cwd={os.getcwd()} (no .serena/project.yml or .git found); "
                     "no project activated. If the folder is a coding project folder to be worked on, "
                     f"activate the folder explicitly using the {ActivateProjectTool.get_name_from_cls()} tool."
+                )
+                log.warning(project_activation_error)
+
+        # Handle --project-from-client flag
+        if project_from_client:
+            if project is not None or project_file_arg is not None:
+                raise click.UsageError("--project-from-client cannot be used with --project or positional project argument")
+            workspace = find_client_workspace_path()
+            if workspace is not None:
+                project = find_project_root(start=workspace)
+                if project is not None:
+                    log.info("Auto-detected project root from client workspace '%s': %s", workspace, project)
+                else:
+                    project_activation_error = (
+                        f"Client workspace {workspace} contains no project root (no .serena/project.yml or .git found); "
+                        "no project activated. If the folder is a coding project folder to be worked on, "
+                        f"activate the folder explicitly using the {ActivateProjectTool.get_name_from_cls()} tool."
+                    )
+                    log.warning(project_activation_error)
+            else:
+                project_activation_error = (
+                    "Could not resolve the workspace of the launching client from its process command line "
+                    "(the client may have been started without a workspace argument); no project activated. "
+                    f"If applicable, activate the folder explicitly using the {ActivateProjectTool.get_name_from_cls()} tool."
                 )
                 log.warning(project_activation_error)
 
@@ -552,16 +607,16 @@ class TopLevelCommands(AutoRegisteringGroup):
     ) -> None:
         from serena.project_server import ProjectServer
 
-        # initialize logging
+        # initialize logging (stderr is added asynchronously, see _add_async_stderr_handler)
         Logger.root.setLevel(logging.INFO)
         formatter = logging.Formatter(SERENA_LOG_FORMAT)
-        stderr_handler = logging.StreamHandler(stream=sys.stderr)
-        stderr_handler.formatter = formatter
-        Logger.root.addHandler(stderr_handler)
         log_path = SerenaPaths().get_next_log_file_path("project-server")
         file_handler = logging.FileHandler(log_path, mode="w")
         file_handler.formatter = formatter
         Logger.root.addHandler(file_handler)
+        stderr_handler = logging.StreamHandler(stream=sys.stderr)
+        stderr_handler.formatter = formatter
+        _add_async_stderr_handler(stderr_handler)
 
         if log_level is not None:
             Logger.root.setLevel(logging.getLevelNamesMapping()[log_level])

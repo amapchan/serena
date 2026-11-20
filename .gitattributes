@@ -7,3 +7,7 @@
 # emmylua_ls does not find cross-file references into a file whose on-disk line endings (CRLF) differ from the LF text
 # Serena sends when opening it, which made the Lua tests fail on Windows runners that check out files with CRLF.
 *.lua text eol=lf
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

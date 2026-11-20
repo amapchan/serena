@@ -33,6 +33,7 @@ class HookClient(Enum):
     GROK = "grok"
     DSH = "dsh"
     ZCODE = "zcode"
+    TRAE = "trae"
 
 
 class Hook(ABC):
@@ -381,13 +382,21 @@ class PreToolUseRemindAboutSymbolicToolsHook(PreToolUseHook):
     #: programs that read files when invoked in a shell-command tool call
     _READ_SHELL_COMMANDS: frozenset[str] = frozenset(("cat", "head", "tail", "sed", "awk", "less", "more", "bat", "get-content", "gc"))
 
-    #: clients which run shell commands via a dedicated native shell tool (named :attr:`_NATIVE_SHELL_TOOL_NAME`).
-    #: For these clients, only calls of that tool are shell-command calls, such that a tool which merely has a
-    #: ``command`` parameter (e.g. an MCP tool triggering a deployment) is not mistaken for one.
+    #: clients which run shell commands via a dedicated native shell tool (named per client in
+    #: :attr:`_NATIVE_SHELL_TOOL_NAMES`). For these clients, only calls of that tool are
+    #: shell-command calls, such that a tool which merely has a ``command`` parameter
+    #: (e.g. an MCP tool triggering a deployment) is not mistaken for one.
     _NATIVE_SHELL_TOOL_CLIENTS: frozenset[HookClient] = frozenset(
-        (HookClient.CLAUDE_CODE, HookClient.CODEBUDDY, HookClient.DSH, HookClient.ZCODE)
+        (HookClient.CLAUDE_CODE, HookClient.CODEBUDDY, HookClient.DSH, HookClient.ZCODE, HookClient.TRAE)
     )
-    _NATIVE_SHELL_TOOL_NAME = "bash"
+    #: native shell tool name per client. Trae normalizes its shell tool as ``RunCommand``.
+    _NATIVE_SHELL_TOOL_NAMES: dict[HookClient, str] = {
+        HookClient.CLAUDE_CODE: "bash",
+        HookClient.CODEBUDDY: "bash",
+        HookClient.DSH: "bash",
+        HookClient.ZCODE: "bash",
+        HookClient.TRAE: "runcommand",
+    }
 
     #: clients whose shell-command tool calls are identified by the presence of a ``cmd``/``command`` parameter alone
     _COMMAND_PARAMETER_SHELL_CLIENTS: frozenset[HookClient] = frozenset((HookClient.CODEX, HookClient.GROK))
@@ -478,6 +487,7 @@ class PreToolUseRemindAboutSymbolicToolsHook(PreToolUseHook):
                 or self._tool_input.get("filePath")
                 or self._tool_input.get("target_file")
                 or self._tool_input.get("targetFile")
+                or self._tool_input.get("path")
                 or ""
             )
             self._file_path = str(file_path).strip() or None
@@ -485,7 +495,7 @@ class PreToolUseRemindAboutSymbolicToolsHook(PreToolUseHook):
     def _is_shell_tool(self) -> bool:
         """:return: whether the called tool executes shell commands"""
         if self._client in self._NATIVE_SHELL_TOOL_CLIENTS:
-            return self._tool_name == self._NATIVE_SHELL_TOOL_NAME
+            return self._tool_name == self._NATIVE_SHELL_TOOL_NAMES.get(self._client, "bash")
         return self._client in self._COMMAND_PARAMETER_SHELL_CLIENTS
 
     def _is_shell_search_call(self) -> bool:

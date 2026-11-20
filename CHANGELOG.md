@@ -3,6 +3,10 @@
 Status of the `main` branch. Changes prior to the next official version change will appear here.
 
 * General:
+  - Add support for Trae IDE / Trae CLI and Trae CN: new `trae` context (`trae-cn` is an alias),
+    `serena setup trae` which merges the Serena entry into the project-level `.trae/mcp.json`,
+    and `serena-hooks --client=trae` support (Trae's `RunCommand`/`Read`/`Grep` tools and
+    `hookSpecificOutput` payload shape).
   - More flexible inclusion/exclusion definitions: 
     - Allow tool exclusions/inclusions to use tool marker names (e.g. `ToolMarkerCanEdit`)
     - Allow API exclusions to include `marker:editing` to exclude all editing functionality
