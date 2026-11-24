@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import json
 import subprocess
 import sys
 import threading
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from sensai.util import logging
@@ -51,6 +55,9 @@ class SerenaDashboardViewer(WebViewWithTray):
 
     DEBUG = False
 
+    ACTIVE_PROJECT_POLL_INTERVAL_SECONDS = 3
+    """interval in seconds between active-project polls for updating the tray icon tooltip"""
+
     def __init__(
         self,
         url: str,
@@ -92,6 +99,10 @@ class SerenaDashboardViewer(WebViewWithTray):
             tray_icon_path=tray_icon_path,
         )
 
+        # base URL of the dashboard API, used for polling the active project for the tray tooltip
+        parts = urllib.parse.urlsplit(url)
+        self._api_base_url = f"{parts.scheme}://{parts.netloc}"
+
     @staticmethod
     def is_current_platform_supported() -> bool:
         """
@@ -110,4 +121,30 @@ class SerenaDashboardViewer(WebViewWithTray):
             logging.configure(level=logging.DEBUG, stream=sys.stderr)
             logging.add_file_logger(SerenaPaths().get_next_log_file_path("dashboard-viewer"))
 
+        # reflect the active project in the tray icon tooltip (on macOS the title is rendered as
+        # menu bar text rather than as a hover tooltip, so it is not updated there)
+        if self._use_tray and sys.platform != "darwin":
+            threading.Thread(target=self._tray_tooltip_loop, name="tray-tooltip-poll", daemon=True).start()
+
         super().run()
+
+    def _tray_tooltip_loop(self) -> None:
+        """Periodically polls the dashboard API and reflects the active project in the tray tooltip."""
+        # wait for the tray icon to be created (happens in _start_tray, called from run())
+        while getattr(self, "_tray_icon", None) is None:
+            time.sleep(0.2)
+        while not self._quitting:
+            self._update_tray_tooltip()
+            time.sleep(self.ACTIVE_PROJECT_POLL_INTERVAL_SECONDS)
+
+    def _update_tray_tooltip(self) -> None:
+        """Performs a single active-project poll and updates the tray icon tooltip if it changed."""
+        try:
+            req = urllib.request.Request(f"{self._api_base_url}/get_active_project", method="GET")
+            with urllib.request.urlopen(req, timeout=2) as response:
+                name: str | None = json.load(response).get("active_project")
+            tooltip = name if name else "Serena Dashboard"
+            if self._tray_icon.title != tooltip:
+                self._tray_icon.title = tooltip
+        except Exception as e:
+            log.debug("Failed to update tray tooltip: %s", e)

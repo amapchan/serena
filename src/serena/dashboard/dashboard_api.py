@@ -285,6 +285,11 @@ class SerenaDashboardAPI:
         def get_heartbeat() -> dict[str, Any]:
             return {"status": "alive"}
 
+        @self._app.route("/get_active_project", methods=["GET"])
+        def get_active_project() -> dict[str, str | None]:
+            project = self._agent.get_active_project()
+            return {"active_project": project.project_name if project else None}
+
         @self._app.route("/get_log_messages", methods=["POST"])
         def get_log_messages() -> dict[str, Any]:
             request_data = request.get_json()
